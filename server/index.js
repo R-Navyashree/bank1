@@ -75,7 +75,7 @@ app.post('/api/register', async (req, res) => {
     res.json({ message: 'Registration successful' });
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
-      return res.status(400).json({ error: 'Username or email already exists' });
+      return res.status(400).json({ message: 'User already exists' });
     }
     res.status(500).json({ error: 'Registration failed' });
   }
@@ -88,20 +88,20 @@ app.post('/api/login', async (req, res) => {
     const [users] = await pool.query('SELECT * FROM KodUser WHERE username = ?', [username]);
 
     if (users.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ message: 'Invalid username or password' });
     }
 
     const user = users[0];
     const validPassword = await bcrypt.compare(password, user.password);
 
     if (!validPassword) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ message: 'Invalid username or password' });
     }
 
     const token = jwt.sign(
-      { username: user.username, role: user.role },
+      { role: user.role },
       JWT_SECRET,
-      { expiresIn: '1h' }
+      { subject: user.username, expiresIn: '1h' }
     );
 
     const expiry = new Date(Date.now() + 3600000);
@@ -111,7 +111,7 @@ app.post('/api/login', async (req, res) => {
     );
 
     res.cookie('token', token, { httpOnly: true, maxAge: 3600000, sameSite: 'none', secure: true });
-    res.json({ message: 'Login successful', username: user.username, role: user.role });
+    res.json({ message: 'Login successful', username: user.username });
   } catch (error) {
     res.status(500).json({ error: 'Login failed' });
   }
@@ -122,12 +122,13 @@ app.get('/api/getBalance', async (req, res) => {
     const token = req.cookies.token;
 
     if (!token) {
-      return res.status(401).json({ error: 'Not authenticated' });
+      return res.status(401).json({ message: 'Unauthorized' });
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
+    const username = decoded.sub;
 
-    const [users] = await pool.query('SELECT balance FROM KodUser WHERE username = ?', [decoded.username]);
+    const [users] = await pool.query('SELECT balance FROM KodUser WHERE username = ?', [username]);
 
     if (users.length === 0) {
       return res.status(404).json({ error: 'User not found' });
@@ -135,13 +136,17 @@ app.get('/api/getBalance', async (req, res) => {
 
     res.json({ balance: users[0].balance });
   } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
+    res.status(401).json({ message: 'Session expired, please login again' });
   }
 });
 
-app.post('/api/logout', (req, res) => {
+app.post('/api/logout', async (req, res) => {
+  const token = req.cookies.token;
   res.clearCookie('token');
-  res.json({ message: 'Logged out' });
+  if (token) {
+    await pool.query('DELETE FROM UserToken WHERE token = ?', [token]);
+  }
+  res.json({ message: 'Logged out successfully' });
 });
 
 initDB().then(() => {
